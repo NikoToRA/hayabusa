@@ -86,6 +86,11 @@ final class ClusterManager: @unchecked Sendable {
                 txtRecord: txtRecord
             )
 
+            listener.newConnectionHandler = { connection in
+                // Accept and immediately cancel — this listener is only for Bonjour advertisement
+                connection.cancel()
+            }
+
             listener.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
