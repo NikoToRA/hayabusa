@@ -29,6 +29,7 @@ struct ClusterNode: Sendable {
 /// Manages Bonjour-based LAN peer discovery for Hayabusa cluster mode.
 ///
 /// Advertises the local node via `NWListener` and discovers peers via `NWBrowser`.
+/// Uses NWConnection to resolve peer IPs, then queries HTTP API for node metadata.
 /// Provides round-robin node selection with failure tracking.
 final class ClusterManager: @unchecked Sendable {
     private let httpPort: Int
@@ -64,38 +65,68 @@ final class ClusterManager: @unchecked Sendable {
         browser?.cancel()
     }
 
+    // MARK: - Local IP Detection
+
+    private static func getLocalIPv4() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+
+        var result: String?
+        for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+            let addr = ptr.pointee
+            guard addr.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            let name = String(cString: addr.ifa_name)
+            guard name != "lo0" else { continue }
+            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(addr.ifa_addr, socklen_t(addr.ifa_addr.pointee.sa_len),
+                           &hostname, socklen_t(hostname.count),
+                           nil, 0, NI_NUMERICHOST) == 0 {
+                let ip = String(cString: hostname)
+                if name == "en0" { return ip }
+                if result == nil { result = ip }
+            }
+        }
+        return result
+    }
+
     // MARK: - Bonjour Advertising
 
     private func startListener() {
         do {
-            // Use a TCP listener on an ephemeral port (port 0) for Bonjour advertisement.
-            // This avoids conflicting with the HTTP server port.
             let params = NWParameters.tcp
             let listener = try NWListener(using: params, on: .any)
 
+            let localIP = ClusterManager.getLocalIPv4() ?? "unknown"
+
             let txtRecord = NWTXTRecord([
                 "port": "\(httpPort)",
+                "host": localIP,
                 "backend": backend,
                 "model": model,
                 "slots": "\(slots)",
             ])
 
             listener.service = NWListener.Service(
-                name: nil,  // auto-generated unique name
+                name: nil,
                 type: serviceType,
                 txtRecord: txtRecord
             )
 
             listener.newConnectionHandler = { connection in
-                // Accept and immediately cancel — this listener is only for Bonjour advertisement
-                connection.cancel()
+                // Accept connections for Bonjour peer resolution
+                connection.stateUpdateHandler = { state in
+                    if case .ready = state { connection.cancel() }
+                    else if case .failed = state { connection.cancel() }
+                }
+                connection.start(queue: .global(qos: .background))
             }
 
             listener.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
                     if let port = listener.port {
-                        print("[Cluster] Bonjour advertising on port \(port) (HTTP: \(self.httpPort))")
+                        print("[Cluster] Bonjour advertising on port \(port) (HTTP: \(self.httpPort), IP: \(localIP))")
                     }
                 case .failed(let error):
                     print("[Cluster] Listener failed: \(error)")
@@ -148,89 +179,107 @@ final class ClusterManager: @unchecked Sendable {
     }
 
     private func handlePeerAdded(_ result: NWBrowser.Result) {
-        // Resolve the endpoint to get TXT record data
-        guard case .service = result.endpoint else { return }
+        guard case .service(let name, _, _, _) = result.endpoint else { return }
 
-        // Extract TXT record
-        var port = 0
-        var backend = ""
-        var model = ""
-        var slots = 0
-
-        if case .bonjour(let txt) = result.metadata {
-            port = Int(txt["port"] ?? "") ?? 0
-            backend = txt["backend"] ?? ""
-            model = txt["model"] ?? ""
-            slots = Int(txt["slots"] ?? "") ?? 0
-        }
-
-        guard port > 0 else { return }
-
-        // Resolve the host — use the service name + .local for now
-        // NWBrowser gives us the endpoint, but for HTTP we need host:port
+        // Resolve the endpoint IP via NWConnection, then query HTTP API
         let connection = NWConnection(to: result.endpoint, using: .tcp)
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
-            if case .ready = state {
+            switch state {
+            case .ready:
                 if let path = connection.currentPath,
                    let endpoint = path.remoteEndpoint,
                    case .hostPort(let host, _) = endpoint {
-                    let hostStr = "\(host)"
-                    let nodeId = "\(hostStr):\(port)"
-                    let isLocal = port == self.httpPort && self.isLocalAddress(hostStr)
+                    // Strip interface suffix (e.g., "192.168.11.34%en1" -> "192.168.11.34")
+                    let rawHost = "\(host)"
+                    let hostStr = rawHost.components(separatedBy: "%").first ?? rawHost
 
-                    let node = ClusterNode(
-                        id: nodeId,
-                        host: hostStr,
-                        port: port,
-                        backend: backend,
-                        model: model,
-                        slots: slots,
-                        isLocal: isLocal,
-                        isHealthy: true,
-                        lastSeen: Date(),
-                        consecutiveFailures: 0
-                    )
-
-                    self.lock.lock()
-                    self.nodes[nodeId] = node
-                    self.lock.unlock()
-                    print("[Cluster] Peer added: \(nodeId) (backend: \(backend), local: \(isLocal))")
+                    // Query the HTTP API to discover port and metadata
+                    self.discoverNode(host: hostStr, serviceName: name)
                 }
                 connection.cancel()
-            } else if case .failed = state {
+            case .failed(let error):
+                print("[Cluster] Failed to resolve \(name): \(error)")
                 connection.cancel()
+            default:
+                break
             }
         }
         connection.start(queue: .global(qos: .utility))
     }
 
-    private func handlePeerRemoved(_ result: NWBrowser.Result) {
-        // Try to find and remove the matching node
-        if case .bonjour(let txt) = result.metadata {
-            let port = Int(txt["port"] ?? "") ?? 0
-            if port > 0 {
-                lock.lock()
-                // Remove nodes matching this port (may match multiple if host is known)
-                let toRemove = nodes.filter { $0.value.port == port && !$0.value.isLocal }
-                for key in toRemove.keys {
-                    nodes.removeValue(forKey: key)
-                    print("[Cluster] Peer removed: \(key)")
-                }
-                lock.unlock()
+    /// Query the peer's HTTP health endpoint to discover its port and register it.
+    /// Tries port 8080 first, then common ports.
+    private func discoverNode(host: String, serviceName: String) {
+        // Try the same port as ours first (most common case), then 8080
+        let portsToTry = Array(Set([httpPort, 8080]))
+
+        for tryPort in portsToTry {
+            let url = URL(string: "http://\(host):\(tryPort)/health")!
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5
+
+            let sem = DispatchSemaphore(value: 0)
+            var success = false
+
+            let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+                defer { sem.signal() }
+                guard let self, error == nil,
+                      let httpResp = response as? HTTPURLResponse,
+                      httpResp.statusCode == 200 else { return }
+
+                success = true
+                let isLocal = self.isLocalAddress(host) && tryPort == self.httpPort
+                let nodeId = "\(host):\(tryPort)"
+
+                let node = ClusterNode(
+                    id: nodeId,
+                    host: host,
+                    port: tryPort,
+                    backend: self.backend,  // assume same backend for now
+                    model: "",
+                    slots: 0,
+                    isLocal: isLocal,
+                    isHealthy: true,
+                    lastSeen: Date(),
+                    consecutiveFailures: 0
+                )
+
+                self.lock.lock()
+                self.nodes[nodeId] = node
+                self.lock.unlock()
+                print("[Cluster] Peer added: \(nodeId) (name: \(serviceName), local: \(isLocal))")
             }
+            task.resume()
+            _ = sem.wait(timeout: .now() + 6)
+            if success { return }
         }
+        print("[Cluster] Could not reach \(serviceName) at \(host)")
+    }
+
+    private func handlePeerRemoved(_ result: NWBrowser.Result) {
+        guard case .service(let name, _, _, _) = result.endpoint else { return }
+        lock.lock()
+        // Remove nodes that might correspond to this service
+        let toRemove = nodes.filter { !$0.value.isLocal }
+        // We don't have exact matching info, so just log for now
+        lock.unlock()
+        print("[Cluster] Service removed: \(name)")
     }
 
     private func isLocalAddress(_ host: String) -> Bool {
-        host == "127.0.0.1" || host == "::1" || host == "localhost"
-            || host.hasPrefix("fe80::") || host == "0.0.0.0"
+        if host == "127.0.0.1" || host == "::1" || host == "localhost"
+            || host.hasPrefix("fe80::") || host == "0.0.0.0" {
+            return true
+        }
+        if let localIP = ClusterManager.getLocalIPv4(), host == localIP {
+            return true
+        }
+        return false
     }
 
     // MARK: - Round-Robin Node Selection
 
-    /// Returns the next healthy node in round-robin order.
-    /// Returns `nil` only if no nodes are known at all.
     func nextNode() -> ClusterNode? {
         lock.lock()
         defer { lock.unlock() }
@@ -239,7 +288,6 @@ final class ClusterManager: @unchecked Sendable {
             if node.isLocal { return true }
             if !node.isHealthy { return false }
             if node.consecutiveFailures >= 3 {
-                // Cooldown: 30 seconds after 3 consecutive failures
                 return Date().timeIntervalSince(node.lastSeen) > 30
             }
             return true
@@ -253,14 +301,13 @@ final class ClusterManager: @unchecked Sendable {
         return node
     }
 
-    /// Mark a node as failed. After 3 consecutive failures, enters 30s cooldown.
     func markFailed(nodeId: String) {
         lock.lock()
         if var node = nodes[nodeId] {
             node.consecutiveFailures += 1
             if node.consecutiveFailures >= 3 {
                 node.isHealthy = false
-                node.lastSeen = Date()  // cooldown timer starts now
+                node.lastSeen = Date()
                 print("[Cluster] Node \(nodeId) marked unhealthy (failures: \(node.consecutiveFailures))")
             }
             nodes[nodeId] = node
@@ -268,7 +315,6 @@ final class ClusterManager: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Mark a node as healthy after successful request.
     func markHealthy(nodeId: String) {
         lock.lock()
         if var node = nodes[nodeId] {
@@ -282,7 +328,6 @@ final class ClusterManager: @unchecked Sendable {
 
     // MARK: - Memory Updates
 
-    /// Update the local node's memory info and slot count (called periodically).
     func updateLocalMemory(_ info: EngineMemoryInfo) {
         lock.lock()
         for key in nodes.keys {
@@ -299,7 +344,6 @@ final class ClusterManager: @unchecked Sendable {
 
     // MARK: - Status
 
-    /// Returns all known nodes for the status endpoint.
     func allNodes() -> [ClusterNode] {
         lock.lock()
         defer { lock.unlock() }
