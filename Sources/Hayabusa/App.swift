@@ -11,6 +11,9 @@ struct HayabusaApp {
         var slotCount = 4
         var ctxPerSlot: UInt32 = 4096
         var backend = "llama"
+        var maxMemoryGB: Double?
+        var maxContext: Int?
+        var clusterMode = false
 
         var i = 0
         while i < args.count {
@@ -24,6 +27,18 @@ struct HayabusaApp {
             case "--backend":
                 i += 1
                 if i < args.count { backend = args[i].lowercased() }
+            case "--max-memory":
+                i += 1
+                if i < args.count {
+                    // Parse "14GB" or "14"
+                    let raw = args[i].uppercased().replacingOccurrences(of: "GB", with: "")
+                    maxMemoryGB = Double(raw)
+                }
+            case "--max-context":
+                i += 1
+                if i < args.count, let n = Int(args[i]) { maxContext = n }
+            case "--cluster":
+                clusterMode = true
             default:
                 if modelPath == nil && !args[i].hasPrefix("-") {
                     modelPath = args[i]
@@ -39,6 +54,9 @@ struct HayabusaApp {
             print("  --backend       Inference backend: llama (default) or mlx")
             print("  --slots         KV cache slot count (default: 4)")
             print("  --ctx-per-slot  Context size per slot (default: 4096, llama only)")
+            print("  --max-memory    MLX memory limit in GB (e.g. 14GB, mlx only)")
+            print("  --max-context   Max KV cache context per generation (mlx only)")
+            print("  --cluster       Enable cluster mode (Bonjour LAN auto-discovery)")
             print("")
             print("  llama backend:  hayabusa models/Qwen3.5-9B-Q4_K_M.gguf --backend llama")
             print("  mlx backend:    hayabusa mlx-community/Qwen2.5-7B-Instruct-4bit --backend mlx")
@@ -52,10 +70,15 @@ struct HayabusaApp {
         print("[Hayabusa] Backend: \(backend)")
         print("[Hayabusa] Loading model: \(resolvedPath)")
 
-        let engine: any InferenceEngine
+        var engine: any InferenceEngine
         switch backend {
         case "mlx":
-            engine = try await MLXEngine(modelId: resolvedPath, slotCount: slotCount)
+            engine = try await MLXEngine(
+                modelId: resolvedPath,
+                slotCount: slotCount,
+                maxMemoryGB: maxMemoryGB,
+                maxContext: maxContext
+            )
         default:
             engine = try LlamaEngine(modelPath: resolvedPath, slotCount: slotCount, perSlotCtx: ctxPerSlot)
             print("[Hayabusa] KV cache: \(slotCount) slots x \(ctxPerSlot) ctx = \(UInt32(slotCount) * ctxPerSlot) total")
@@ -63,8 +86,34 @@ struct HayabusaApp {
 
         print("[Hayabusa] Model loaded (\(engine.modelDescription))")
         print("[Hayabusa] Slots: \(slotCount)")
-        print("[Hayabusa] Starting server on http://127.0.0.1:\(port)")
-        let server = HayabusaServer(engine: engine, port: port)
+
+        // Cluster mode
+        let bindAddress: String
+        var clusterManager: ClusterManager?
+        if clusterMode {
+            bindAddress = "0.0.0.0"
+            let cm = ClusterManager(
+                httpPort: port,
+                backend: backend,
+                model: resolvedPath,
+                slots: slotCount
+            )
+            cm.start()
+            clusterManager = cm
+            let clusterEngine = ClusterEngine(localEngine: engine, clusterManager: cm)
+            engine = clusterEngine
+            print("[Hayabusa] Cluster mode enabled (Bonjour: _hayabusa._tcp)")
+        } else {
+            bindAddress = "127.0.0.1"
+        }
+
+        print("[Hayabusa] Starting server on http://\(bindAddress):\(port)")
+        let server = HayabusaServer(
+            engine: engine,
+            port: port,
+            bindAddress: bindAddress,
+            clusterManager: clusterManager
+        )
         try await server.run()
     }
 }

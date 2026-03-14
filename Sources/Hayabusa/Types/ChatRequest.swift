@@ -3,7 +3,7 @@ struct ChatMessage: Codable, Sendable {
     let content: String
 }
 
-struct ChatRequest: Decodable, Sendable {
+struct ChatRequest: Codable, Sendable {
     let messages: [ChatMessage]
     let model: String?
     let max_tokens: Int?

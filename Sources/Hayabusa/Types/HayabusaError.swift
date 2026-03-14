@@ -8,6 +8,7 @@ enum HayabusaError: Error, CustomStringConvertible {
     case templateFailed
     case noSlotsAvailable
     case contextExceeded
+    case remoteNodeFailed
 
     var description: String {
         switch self {
@@ -20,6 +21,7 @@ enum HayabusaError: Error, CustomStringConvertible {
         case .templateFailed: "Chat template application failed"
         case .noSlotsAvailable: "All KV cache slots are occupied"
         case .contextExceeded: "Prompt + max_tokens exceeds slot context size"
+        case .remoteNodeFailed: "Remote cluster node failed to respond"
         }
     }
 }

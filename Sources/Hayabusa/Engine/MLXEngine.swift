@@ -1,20 +1,19 @@
 import Foundation
+import MLX
 import MLXLLM
 import MLXLMCommon
 
 final class MLXEngine: InferenceEngine, @unchecked Sendable {
     private let modelContainer: ModelContainer
+    private let scheduler: MLXBatchScheduler
+    private let memoryMonitor: MemoryMonitor
     let modelDescription: String
-    let slotCount: Int
+    private let initialSlotCount: Int
 
-    // Slot tracking for diagnostics (protected by lock)
-    private let lock = NSLock()
-    private var slotStates: [SlotState]
-    private var activeCount = 0
+    var slotCount: Int { scheduler.currentSlotCount }
 
-    init(modelId: String, slotCount: Int = 4) async throws {
-        self.slotCount = slotCount
-        self.slotStates = Array(repeating: .idle, count: slotCount)
+    init(modelId: String, slotCount: Int = 4, maxMemoryGB: Double? = nil, maxContext: Int? = nil) async throws {
+        self.initialSlotCount = slotCount
 
         let configuration = ModelConfiguration(id: modelId)
 
@@ -27,8 +26,58 @@ final class MLXEngine: InferenceEngine, @unchecked Sendable {
                 }
             }
         )
+
+        // Apply memory limits after model load
+        if let gb = maxMemoryGB {
+            let bytes = Int(gb * 1024 * 1024 * 1024)
+            Memory.memoryLimit = bytes
+            Memory.cacheLimit = min(256 * 1024 * 1024, bytes / 10)
+            Memory.clearCache()
+            print("[MLX] Memory limit: \(gb)GB, cache limit: \(min(256, Int(gb * 1024) / 10))MB")
+        }
+        if let ctx = maxContext {
+            print("[MLX] Max KV context: \(ctx)")
+        }
+
         self.modelDescription = "MLX \(modelId)"
-        print("[MLX] Model loaded successfully")
+        self.scheduler = MLXBatchScheduler(modelContainer: modelContainer, slotCount: slotCount, maxContext: maxContext)
+
+        // Set up memory monitor with dynamic slot adjustment
+        let sched = self.scheduler
+        self.memoryMonitor = MemoryMonitor(activeSlots: { [weak sched] in
+            sched?.activeSlotCount ?? 0
+        })
+
+        let initSlots = slotCount
+        self.memoryMonitor.onPressureChange = { [weak sched] pressure, info in
+            guard let sched else { return }
+            let current = sched.currentSlotCount
+
+            switch pressure {
+            case .normal:
+                // Free > 4GB: can grow back toward initial count (or +1)
+                if current < initSlots {
+                    sched.adjustSlots(to: current + 1)
+                }
+            case .low:
+                // 2-4GB free: hold steady, no changes
+                break
+            case .critical:
+                // 1-2GB free: reduce by 1 slot
+                if current > MLXBatchScheduler.minimumSlots {
+                    sched.adjustSlots(to: current - 1)
+                }
+                Memory.clearCache()
+            case .emergency:
+                // < 1GB free: emergency — drop to minimum + clear cache
+                sched.adjustSlots(to: MLXBatchScheduler.minimumSlots)
+                Memory.clearCache()
+                print("[MLX] EMERGENCY: memory critically low, forced to \(MLXBatchScheduler.minimumSlots) slot(s)")
+            }
+        }
+
+        self.memoryMonitor.start()
+        print("[MLX] Model loaded successfully (batch scheduler + memory monitor active)")
     }
 
     func generate(
@@ -37,91 +86,35 @@ final class MLXEngine: InferenceEngine, @unchecked Sendable {
         temperature: Float,
         priority: SlotPriority
     ) async throws -> GenerationResult {
-        // Track slot state for diagnostics
-        let slotIndex = acquireSlotIndex()
-        guard let slotIndex else {
-            throw HayabusaError.noSlotsAvailable
-        }
-        defer { releaseSlotIndex(slotIndex) }
-
-        // Convert ChatMessage to MLX message format
         let mlxMessages: [[String: String]] = messages.map {
             ["role": $0.role, "content": $0.content]
         }
 
-        // Prepare input using chat template
-        let userInput = UserInput(messages: mlxMessages)
-
-        setSlotState(slotIndex, .promptEval)
-        let lmInput = try await modelContainer.prepare(input: userInput)
-
-        // Generate
-        setSlotState(slotIndex, .generating)
-        let parameters = GenerateParameters(
-            maxTokens: maxTokens,
-            temperature: temperature
-        )
-
-        let stream = try await modelContainer.generate(
-            input: lmInput,
-            parameters: parameters
-        )
-
-        var text = ""
-        var promptTokens = 0
-        var completionTokens = 0
-
-        for try await generation in stream {
-            switch generation {
-            case .chunk(let chunk):
-                text += chunk
-            case .info(let info):
-                promptTokens = info.promptTokenCount
-                completionTokens = info.generationTokenCount
-            case .toolCall:
-                break
-            }
+        return try await withCheckedThrowingContinuation { continuation in
+            let job = MLXGenerationJob(
+                messages: mlxMessages,
+                maxTokens: maxTokens,
+                temperature: temperature,
+                priority: priority,
+                continuation: continuation
+            )
+            scheduler.submit(job)
         }
-
-        return GenerationResult(
-            text: text,
-            promptTokens: promptTokens,
-            completionTokens: completionTokens
-        )
     }
 
     func slotSummary() -> [(index: Int, state: String, priority: String, pos: Int32)] {
-        lock.lock()
-        let states = slotStates
-        lock.unlock()
-        return states.enumerated().map { (i, state) in
-            (index: i, state: state.rawValue, priority: "low", pos: 0)
-        }
+        scheduler.slotSummary()
     }
 
-    // MARK: - Slot tracking
-
-    private func acquireSlotIndex() -> Int? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let idx = slotStates.firstIndex(of: .idle) else {
-            return nil
-        }
-        slotStates[idx] = .promptEval
-        activeCount += 1
-        return idx
-    }
-
-    private func releaseSlotIndex(_ index: Int) {
-        lock.lock()
-        slotStates[index] = .idle
-        activeCount -= 1
-        lock.unlock()
-    }
-
-    private func setSlotState(_ index: Int, _ state: SlotState) {
-        lock.lock()
-        slotStates[index] = state
-        lock.unlock()
+    func memoryInfo() -> EngineMemoryInfo? {
+        let info = memoryMonitor.latestInfo
+        let pressure = memoryMonitor.currentPressure
+        return EngineMemoryInfo(
+            totalPhysical: info.totalPhysical,
+            rssBytes: info.rssBytes,
+            freeEstimate: info.freeEstimate,
+            activeSlots: info.activeSlots,
+            pressure: pressure.rawValue
+        )
     }
 }
