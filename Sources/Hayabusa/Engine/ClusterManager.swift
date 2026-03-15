@@ -30,7 +30,7 @@ struct ClusterNode: Sendable {
 ///
 /// Advertises the local node via `NWListener` and discovers peers via `NWBrowser`.
 /// Uses NWConnection to resolve peer IPs, then queries HTTP API for node metadata.
-/// Provides round-robin node selection with failure tracking.
+/// Uses Uzu (bandwidth-first) routing for node selection.
 final class ClusterManager: @unchecked Sendable {
     private let httpPort: Int
     private let backend: String
@@ -39,23 +39,41 @@ final class ClusterManager: @unchecked Sendable {
 
     private let lock = NSLock()
     private var nodes: [String: ClusterNode] = [:]
-    private var roundRobinIndex = 0
+
+    let router: BandwidthRouter
 
     private var listener: NWListener?
     private var browser: NWBrowser?
 
     private let serviceType = "_hayabusa._tcp"
 
-    init(httpPort: Int, backend: String, model: String, slots: Int) {
+    init(httpPort: Int, backend: String, model: String, slots: Int, spilloverThreshold: Double = 0.8) {
         self.httpPort = httpPort
         self.backend = backend
         self.model = model
         self.slots = slots
+        self.router = BandwidthRouter(spilloverThreshold: spilloverThreshold, localSlots: slots)
     }
 
     // MARK: - Start / Stop
 
     func start() {
+        // Register local node with Uzu router
+        let localIP = ClusterManager.getLocalIPv4() ?? "127.0.0.1"
+        let localId = "\(localIP):\(httpPort)"
+        let localNode = ClusterNode(
+            id: localId, host: localIP, port: httpPort,
+            backend: backend, model: model, slots: slots,
+            isLocal: true, isHealthy: true, lastSeen: Date(),
+            consecutiveFailures: 0
+        )
+        lock.lock()
+        nodes[localId] = localNode
+        lock.unlock()
+
+        let initialLocal: Double = backend == "llama" ? 70.0 : 40.0
+        router.registerNode(id: localId, isLocal: true, initialBandwidth: initialLocal)
+
         startListener()
         startBrowser()
     }
@@ -255,6 +273,9 @@ final class ClusterManager: @unchecked Sendable {
                 self.lock.lock()
                 self.nodes[nodeId] = node
                 self.lock.unlock()
+                if !isLocal {
+                    self.router.registerNode(id: nodeId, isLocal: false, initialBandwidth: 30.0)
+                }
                 print("[Cluster] Peer added: \(nodeId) (name: \(serviceName), local: \(isLocal))")
             }
             task.resume()
@@ -312,6 +333,7 @@ final class ClusterManager: @unchecked Sendable {
                 self.lock.lock()
                 self.nodes[nodeId] = node
                 self.lock.unlock()
+                self.router.registerNode(id: nodeId, isLocal: false, initialBandwidth: 30.0)
                 print("[Cluster] Explicit peer added: \(nodeId)")
             }
             task.resume()
@@ -340,26 +362,13 @@ final class ClusterManager: @unchecked Sendable {
         return false
     }
 
-    // MARK: - Round-Robin Node Selection
+    // MARK: - Uzu Bandwidth-First Node Selection
 
-    func nextNode() -> ClusterNode? {
+    func nextNode(excluding: Set<String> = []) -> ClusterNode? {
+        guard let selectedId = router.selectNode(excluding: excluding) else { return nil }
         lock.lock()
-        defer { lock.unlock() }
-
-        let healthyNodes = nodes.values.filter { node in
-            if node.isLocal { return true }
-            if !node.isHealthy { return false }
-            if node.consecutiveFailures >= 3 {
-                return Date().timeIntervalSince(node.lastSeen) > 30
-            }
-            return true
-        }.sorted { $0.id < $1.id }
-
-        guard !healthyNodes.isEmpty else { return nil }
-
-        roundRobinIndex = roundRobinIndex % healthyNodes.count
-        let node = healthyNodes[roundRobinIndex]
-        roundRobinIndex += 1
+        let node = nodes[selectedId]
+        lock.unlock()
         return node
     }
 
@@ -375,6 +384,7 @@ final class ClusterManager: @unchecked Sendable {
             nodes[nodeId] = node
         }
         lock.unlock()
+        router.recordFailure(nodeId: nodeId)
     }
 
     func markHealthy(nodeId: String) {
@@ -386,6 +396,10 @@ final class ClusterManager: @unchecked Sendable {
             nodes[nodeId] = node
         }
         lock.unlock()
+    }
+
+    func bandwidthSnapshots() -> [BandwidthSnapshot] {
+        router.allSnapshots()
     }
 
     // MARK: - Memory Updates

@@ -15,6 +15,7 @@ struct HayabusaApp {
         var maxContext: Int?
         var clusterMode = false
         var peers: [String] = []
+        var spilloverThreshold: Double = 0.8
 
         var i = 0
         while i < args.count {
@@ -46,6 +47,11 @@ struct HayabusaApp {
                     // Parse comma-separated peers: "192.168.1.10:8080,192.168.1.11:8080"
                     peers = args[i].split(separator: ",").map(String.init)
                 }
+            case "--spillover":
+                i += 1
+                if i < args.count, let v = Double(args[i]) {
+                    spilloverThreshold = max(0.0, min(1.0, v))
+                }
             default:
                 if modelPath == nil && !args[i].hasPrefix("-") {
                     modelPath = args[i]
@@ -65,6 +71,7 @@ struct HayabusaApp {
             print("  --max-context   Max KV cache context per generation (mlx only)")
             print("  --cluster       Enable cluster mode (Bonjour LAN auto-discovery)")
             print("  --peers         Comma-separated peer addresses (e.g. 192.168.1.10:8080)")
+            print("  --spillover     Uzu spillover threshold 0.0-1.0 (default: 0.8)")
             print("")
             print("  llama backend:  hayabusa models/Qwen3.5-9B-Q4_K_M.gguf --backend llama")
             print("  mlx backend:    hayabusa mlx-community/Qwen2.5-7B-Instruct-4bit --backend mlx")
@@ -104,7 +111,8 @@ struct HayabusaApp {
                 httpPort: port,
                 backend: backend,
                 model: resolvedPath,
-                slots: slotCount
+                slots: slotCount,
+                spilloverThreshold: spilloverThreshold
             )
             cm.start()
             // Register explicit peers
@@ -119,6 +127,7 @@ struct HayabusaApp {
             } else {
                 print("[Hayabusa] Cluster mode enabled (peers: \(peers.joined(separator: ", ")))")
             }
+            print("[Hayabusa] Uzu routing (spillover=\(spilloverThreshold))")
         } else {
             bindAddress = "127.0.0.1"
         }

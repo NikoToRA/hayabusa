@@ -92,7 +92,19 @@ struct HayabusaServer {
                 "freeMemory":\(node.freeMemory),"memoryPressure":"\(node.memoryPressure)"}
                 """
             }
-            return "{\"cluster\":true,\"nodes\":[\(nodesJson.joined(separator: ","))]}"
+            let bandwidthJson = cm.bandwidthSnapshots().map { s in
+                """
+                {"nodeId":"\(s.nodeId)","isLocal":\(s.isLocal),\
+                "ewmaTokPerSec":\(String(format: "%.1f", s.ewmaTokPerSec)),\
+                "activeRequests":\(s.activeRequests),\
+                "totalRequests":\(s.totalRequests),"totalTokens":\(s.totalTokens)}
+                """
+            }
+            return """
+            {"cluster":true,"routing":"uzu",\
+            "nodes":[\(nodesJson.joined(separator: ","))],\
+            "bandwidth":[\(bandwidthJson.joined(separator: ","))]}
+            """
         }
 
         let app = Application(
