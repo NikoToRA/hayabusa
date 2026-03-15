@@ -99,29 +99,18 @@ final class BandwidthRouter: @unchecked Sendable {
     }
 
     /// Select the best node for the next request.
-    /// 1. If local utilization < spilloverThreshold → prefer local
-    /// 2. Otherwise → pick node with highest effectiveBandwidth
-    /// 3. If all remote nodes excluded → fallback to local
+    /// Always picks the node with highest effectiveBandwidth:
+    ///   effectiveBandwidth = ewmaTokPerSec / (1 + activeRequests)
+    /// Fast nodes get requests first; slow nodes absorb overflow.
     func selectNode(excluding: Set<String> = []) -> String? {
         lock.lock()
         defer { lock.unlock() }
 
         let available = trackers.values.filter { !excluding.contains($0.nodeId) }
         guard !available.isEmpty else {
-            // All excluded — return local if available
             return trackers.values.first(where: { $0.isLocal })?.nodeId
         }
 
-        // Check local utilization
-        if let local = available.first(where: { $0.isLocal }) {
-            let utilization = Double(local.activeRequests) / Double(max(localSlots, 1))
-            if utilization < spilloverThreshold {
-                return local.nodeId
-            }
-        }
-
-        // Spillover: pick node with highest effective bandwidth
-        // effectiveBandwidth = ewmaTokPerSec / (1 + activeRequests)
         let best = available
             .filter { $0.consecutiveFailures < 5 }
             .max { a, b in
@@ -130,7 +119,6 @@ final class BandwidthRouter: @unchecked Sendable {
                 return aEff < bEff
             }
 
-        // Fallback to local if no healthy remote nodes
         return best?.nodeId ?? trackers.values.first(where: { $0.isLocal })?.nodeId
     }
 
