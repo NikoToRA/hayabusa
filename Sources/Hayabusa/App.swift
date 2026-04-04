@@ -22,6 +22,7 @@ struct HayabusaApp {
         var kvQuantize: KVQuantizeMode = .off
         var layerSkipThreshold: Double?
         var layerSkipTask: String = "soap"
+        var vllmEndpoint: String?
         var genomeMode = false
         var genomeOutputPath: String?
 
@@ -82,6 +83,9 @@ struct HayabusaApp {
             case "--task":
                 i += 1
                 if i < args.count { layerSkipTask = args[i].lowercased() }
+            case "--vllm-endpoint":
+                i += 1
+                if i < args.count { vllmEndpoint = args[i] }
             case "--genome-mode":
                 genomeMode = true
             case "--genome-output-path":
@@ -99,10 +103,11 @@ struct HayabusaApp {
 
         // Speculative decoding mode uses --draft-model and --target-model instead
         let isSpeculativeMode = draftModelPath != nil && targetModelPath != nil
+        let isVllmMode = backend == "vllm-mlx"
 
-        guard isSpeculativeMode || (resolvedPath != nil && !resolvedPath!.isEmpty) else {
-            print("Usage: hayabusa <model-path> [--backend llama|mlx] [--slots N] [--ctx-per-slot N]")
-            print("  --backend             Inference backend: llama (default) or mlx")
+        guard isSpeculativeMode || isVllmMode || (resolvedPath != nil && !resolvedPath!.isEmpty) else {
+            print("Usage: hayabusa <model-path> [--backend llama|mlx|vllm-mlx] [--slots N] [--ctx-per-slot N]")
+            print("  --backend             Inference backend: llama (default), mlx, or vllm-mlx")
             print("  --slots               KV cache slot count (default: 4)")
             print("  --ctx-per-slot        Context size per slot (default: 4096, llama only)")
             print("  --max-memory          MLX memory limit in GB (e.g. 14GB, mlx only)")
@@ -118,10 +123,15 @@ struct HayabusaApp {
             print("")
             print("  KV Cache Quantization:")
             print("  --kv-quantize int8    Quantize KV cache to int8 (~50% memory savings)")
+            print("  --kv-quantize tq3     TurboQuant 3-bit KV cache (~78% memory savings)")
+            print("  --kv-quantize tq4     TurboQuant 4-bit KV cache (~72% memory savings)")
             print("")
             print("  Layer Skipping (MLX only):")
             print("  --layer-skip 0.3      Skip layers with importance <= 30%")
             print("  --task soap           Task-specific importance profile (default: soap)")
+            print("")
+            print("  vllm-mlx Proxy Backend:")
+            print("  --vllm-endpoint URL   vllm-mlx server address (default: http://localhost:8000)")
             print("")
             print("  AI Genome:")
             print("  --genome-mode              Collect per-layer genome metrics and exit")
@@ -129,6 +139,7 @@ struct HayabusaApp {
             print("")
             print("  llama backend:  hayabusa models/Qwen3.5-9B-Q4_K_M.gguf --backend llama")
             print("  mlx backend:    hayabusa mlx-community/Qwen2.5-7B-Instruct-4bit --backend mlx")
+            print("  vllm-mlx:       hayabusa --backend vllm-mlx --vllm-endpoint http://localhost:8000")
             print("  speculative:    hayabusa --draft-model small.gguf --target-model large.gguf")
             print("")
             print("  or set HAYABUSA_MODEL environment variable")
@@ -157,9 +168,11 @@ struct HayabusaApp {
             speculativeDecoder = decoder
             engine = decoder
         } else {
-            let resolvedPath = resolvedPath!
+            let resolvedPath = resolvedPath ?? ""
             print("[Hayabusa] Backend: \(backend)")
-            print("[Hayabusa] Loading model: \(resolvedPath)")
+            if !resolvedPath.isEmpty {
+                print("[Hayabusa] Loading model: \(resolvedPath)")
+            }
 
             if kvQuantize != .off {
                 print("[Hayabusa] KV cache quantization: \(kvQuantize.description)")
@@ -172,6 +185,10 @@ struct HayabusaApp {
             }
 
             switch backend {
+            case "vllm-mlx":
+                engine = try await VllmMLXBackend(
+                    endpoint: vllmEndpoint ?? "http://localhost:8000"
+                )
             case "mlx":
                 engine = try await MLXEngine(
                     modelId: resolvedPath,

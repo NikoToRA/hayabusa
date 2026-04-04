@@ -1,0 +1,341 @@
+{
+  "timestamp": "2026-04-02T18:19:08",
+  "results": {
+    "kv-int8": {
+      "bfcl": [
+        {
+          "test_id": "bfcl_simple_01",
+          "category": "simple",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 549.6,
+          "details": "Function 'get_weather' found; Arg 'city=Tokyo' found",
+          "response": "```json\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Tokyo\", \"unit\": \"celsius\"}}\n```"
+        },
+        {
+          "test_id": "bfcl_simple_02",
+          "category": "simple",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.75,
+          "latency_ms": 630.2,
+          "details": "Function 'calculate' found; Arg 'expression=355/113' NOT found; Arg 'precision=6' found",
+          "response": "</think>\n\n```json\n{\"name\": \"calculate\", \"parameters\": {\"expression\": \"355 / 113\", \"precision\": 6}}\n```"
+        },
+        {
+          "test_id": "bfcl_multiple_01",
+          "category": "multiple",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 665.4,
+          "details": "Function 'search_web' found; Arg 'query=Rust programming language' found; Arg 'max_results=5' found",
+          "response": "</think>\n\n```json\n{\"name\": \"search_web\", \"parameters\": {\"query\": \"Rust programming language\", \"max_results\": 5}}\n```"
+        },
+        {
+          "test_id": "bfcl_parallel_01",
+          "category": "parallel",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 1140.8,
+          "details": "Function 'get_stock_price' found; Parallel calls: 3/3",
+          "response": "</think>\n\n```json\n[\n  {\"name\": \"get_stock_price\", \"arguments\": {\"symbol\": \"AAPL\"}},\n  {\"name\": \"get_stock_price\", \"arguments\": {\"symbol\": \"GOOGL\"}},\n  {\"name\": \"get_stock_price\", \"arguments\": {\"symbol\": \"MSFT\"}}\n]\n```"
+        },
+        {
+          "test_id": "bfcl_irrelevance_01",
+          "category": "irrelevance",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 4123.0,
+          "details": "Correctly avoided function call",
+          "response": "The meaning of life is a profound and deeply personal question that has been explored by philosophers, scientists, artists, and thinkers throughout history. There is no single, universally agreed-upon answer, but here are some perspectives:\n\n1. **Philosophical Views**:\n   - **Existentialism**: Suggests that life has no inherent meaning, and it is up to each individual to create their own purpose.\n   - **Nihilism**: Argues that life is without objective meaning, purpose, or intrinsic value.\n   - **Absurdism**: Proposes that the search for meaning in a meaningless world is inherently absurd, yet we must live with this tension.\n\n2. **Religious and Spiritual Perspectives**:\n   - Many religions believe that life has a divine purpose, such as serving a higher power, achieving enlightenment, or preparing for an afterlife.\n\n3. **Scientific Perspective**:\n   - From a biological standpoint, the purpose of life is often seen as survival, reproduction, and the continuation of the species.\n\n4. **Personal Meaning**:\n   - For many, the meaning of life is found in relationships, creativity, learning, contributing to society, or pursuing passions.\n\nUltimately, the meaning of life is something each person defines for themselves. It might evolve over time as you grow, learn, and experience the world. What does it mean to you?"
+        },
+        {
+          "test_id": "bfcl_irrelevance_02",
+          "category": "irrelevance",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 453.2,
+          "details": "Correctly avoided function call",
+          "response": "Why don't airplanes ever get lost?\n\nBecause they always have a flight plan!️"
+        }
+      ],
+      "humaneval": [
+        {
+          "test_id": "he_001",
+          "category": "basic",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 1709.7,
+          "details": "All tests passed",
+          "response": "```python\ndef is_palindrome(s: str) -> bool:\n    \"\"\"Check if a string is a palindrome, ignoring case and non-alphanumeric characters.\n    >>> is_palindrome('A man, a plan, a canal: Panama')\n    True\n    >>> is_palindrome('race a car')\n    False\n    >>> is_palindrome('')\n    True\n    \"\"\"\n    cleaned = ''.join(char.lower() for char in s if char.isalnum())\n    return cleaned == cleaned[::-1]\n```"
+        },
+        {
+          "test_id": "he_002",
+          "category": "basic",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2199.5,
+          "details": "All tests passed",
+          "response": "</think>\n\n```python\ndef two_sum(nums: list[int], target: int) -> list[int]:\n    \"\"\"Return indices of two numbers that add up to target.\n    >>> two_sum([2, 7, 11, 15], 9)\n    [0, 1]\n    >>> two_sum([3, 2, 4], 6)\n    [1, 2]\n    \"\"\"\n    seen = {}\n    for i, num in enumerate(nums):\n        complement = target - num\n        if complement in seen:\n            return [seen[complement], i]\n        seen[num] = i\n    return []\n```"
+        },
+        {
+          "test_id": "he_003",
+          "category": "algorithm",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 3460.2,
+          "details": "All tests passed",
+          "response": "```python\ndef longest_common_subsequence(s1: str, s2: str) -> int:\n    \"\"\"Return the length of the longest common subsequence.\n    >>> longest_common_subsequence('abcde', 'ace')\n    3\n    >>> longest_common_subsequence('abc', 'def')\n    0\n    >>> longest_common_subsequence('abc', 'abc')\n    3\n    \"\"\"\n    m, n = len(s1), len(s2)\n    dp = [[0] * (n + 1) for _ in range(m + 1)]\n    \n    for i in range(1, m + 1):\n        for j in range(1, n + 1):\n            if s1[i - 1] == s2[j - 1]:\n                dp[i][j] = dp[i - 1][j - 1] + 1\n            else:\n                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])\n    \n    return dp[m][n]\n```"
+        },
+        {
+          "test_id": "he_004",
+          "category": "algorithm",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2522.7,
+          "details": "All tests passed",
+          "response": "</think>\n\n```python\ndef max_subarray_sum(nums: list[int]) -> int:\n    \"\"\"Find the contiguous subarray with the largest sum (Kadane's algorithm).\n    >>> max_subarray_sum([-2, 1, -3, 4, -1, 2, 1, -5, 4])\n    6\n    >>> max_subarray_sum([1])\n    1\n    >>> max_subarray_sum([-1, -2, -3])\n    -1\n    \"\"\"\n    max_sum = current_sum = nums[0]\n    for num in nums[1:]:\n        current_sum = max(num, current_sum + num)\n        max_sum = max(max_sum, current_sum)\n    return max_sum\n```"
+        },
+        {
+          "test_id": "he_005",
+          "category": "data_structure",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2872.0,
+          "details": "All tests passed",
+          "response": "</think>\n\n```python\ndef is_valid_parentheses(s: str) -> bool:\n    \"\"\"Check if the input string has valid parentheses.\n    >>> is_valid_parentheses('()')\n    True\n    >>> is_valid_parentheses('()[]{}')\n    True\n    >>> is_valid_parentheses('(]')\n    False\n    >>> is_valid_parentheses('([)]')\n    False\n    >>> is_valid_parentheses('{[]}')\n    True\n    \"\"\"\n    stack = []\n    mapping = {')': '(', ']': '[', '}': '{'}\n    \n    for char in s:\n        if char in mapping:\n            top_element = stack.pop() if stack else '#'\n            if mapping[char] != top_element:\n                return False\n        else:\n            stack.append(char)\n    \n    return len(stack) == 0\n```"
+        },
+        {
+          "test_id": "he_006",
+          "category": "data_structure",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2497.4,
+          "details": "All tests passed",
+          "response": "</think>\n\n```python\ndef group_anagrams(strs: list[str]) -> list[list[str]]:\n    \"\"\"Group anagrams together. Return groups in any order.\n    >>> sorted([sorted(g) for g in group_anagrams(['eat','tea','tan','ate','nat','bat'])])\n    [['ate', 'eat', 'tea'], ['bat'], ['nat', 'tan']]\n    >>> group_anagrams([''])\n    [['']]\n    >>> group_anagrams(['a'])\n    [['a']]\n    \"\"\"\n    groups = {}\n    for s in strs:\n        key = ''.join(sorted(s))\n        if key not in groups:\n            groups[key] = []\n        groups[key].append(s)\n    return list(groups.values())\n```"
+        },
+        {
+          "test_id": "he_007",
+          "category": "string",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2896.1,
+          "details": "All tests passed",
+          "response": "```python\ndef roman_to_int(s: str) -> int:\n    \"\"\"Convert a Roman numeral string to an integer.\n    >>> roman_to_int('III')\n    3\n    >>> roman_to_int('LVIII')\n    58\n    >>> roman_to_int('MCMXCIV')\n    1994\n    \"\"\"\n    roman_map = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}\n    total = 0\n    prev_value = 0\n    \n    for char in reversed(s):\n        value = roman_map[char]\n        if value < prev_value:\n            total -= value\n        else:\n            total += value\n        prev_value = value\n    \n    return total\n```"
+        },
+        {
+          "test_id": "he_008",
+          "category": "math",
+          "target": "Hayabusa",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2841.0,
+          "details": "All tests passed",
+          "response": "</think>\n\n```python\ndef count_primes(n: int) -> int:\n    \"\"\"Count the number of prime numbers less than n (Sieve of Eratosthenes).\n    >>> count_primes(10)\n    4\n    >>> count_primes(0)\n    0\n    >>> count_primes(1)\n    0\n    >>> count_primes(2)\n    0\n    \"\"\"\n    if n <= 2:\n        return 0\n    \n    is_prime = [True] * n\n    is_prime[0] = is_prime[1] = False\n    \n    for i in range(2, int(n ** 0.5) + 1):\n        if is_prime[i]:\n            for j in range(i * i, n, i):\n                is_prime[j] = False\n    \n    return sum(is_prime)\n```"
+        }
+      ]
+    },
+    "ollama": {
+      "bfcl": [
+        {
+          "test_id": "bfcl_simple_01",
+          "category": "simple",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2139.2,
+          "details": "Function 'get_weather' found; Arg 'city=Tokyo' found",
+          "response": "```json\n{\n  \"name\": \"get_weather\",\n  \"arguments\": {\n    \"city\": \"Tokyo\"\n  }\n}\n```"
+        },
+        {
+          "test_id": "bfcl_simple_02",
+          "category": "simple",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 1995.4,
+          "details": "Function 'calculate' found; Arg 'expression=355/113' found; Arg 'precision=6' found",
+          "response": "```json\n{\"name\": \"calculate\", \"parameters\": {\"expression\": \"355/113\", \"precision\": 6}}\n```"
+        },
+        {
+          "test_id": "bfcl_multiple_01",
+          "category": "multiple",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2720.4,
+          "details": "Function 'search_web' found; Arg 'query=Rust programming language' found; Arg 'max_results=5' found",
+          "response": "```json\n{\n  \"name\": \"search_web\",\n  \"parameters\": {\n    \"query\": \"Rust programming language\",\n    \"max_results\": 5\n  }\n}\n```"
+        },
+        {
+          "test_id": "bfcl_parallel_01",
+          "category": "parallel",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 3147.1,
+          "details": "Function 'get_stock_price' found; Parallel calls: 3/3",
+          "response": "```json\n[\n  {\"name\": \"get_stock_price\", \"parameters\": {\"symbol\": \"AAPL\"}},\n  {\"name\": \"get_stock_price\", \"parameters\": {\"symbol\": \"GOOGL\"}},\n  {\"name\": \"get_stock_price\", \"parameters\": {\"symbol\": \"MSFT\"}}\n]\n```"
+        },
+        {
+          "test_id": "bfcl_irrelevance_01",
+          "category": "irrelevance",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 6199.4,
+          "details": "Correctly avoided function call",
+          "response": "The meaning of life is one of humanity's oldest and most profound questions, and there isn't a single definitive answer. Different perspectives offer various insights:\n\n**Philosophical Views:**\n- **Existentialism**: Life has no inherent meaning, but we create our own purpose through choices and actions.\n- **Nihilism**: Life may have no intrinsic meaning, but this can be liberating rather than depressing.\n- **Humanism**: Meaning comes from human connection, creativity, and contributing to society.\n- **Religious/Spiritual**: Many traditions suggest meaning comes from connecting with the divine or fulfilling a spiritual purpose.\n\n**Practical Perspectives:**\n- Finding joy in daily experiences\n- Building meaningful relationships\n- Creating something (art, knowledge, community)\n- Helping others and making a positive impact\n- Pursuing personal growth and learning\n\nUltimately, the meaning of life is something each person discovers through their own experiences, values, and choices. What matters most is what brings you fulfillment and purpose.\n\nIs there a particular aspect of this question you'd like to explore further?"
+        },
+        {
+          "test_id": "bfcl_irrelevance_02",
+          "category": "irrelevance",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2861.7,
+          "details": "Correctly avoided function call",
+          "response": "Here's a joke about airplanes for you:\n\nWhy don't airplanes ever get lost?\n\nBecause they always know where they're going... and they're never afraid to take a wrong turn! ✈️😄\n\nOr here's another one:\n\nWhat do you call an airplane that tells jokes?\n\nA pun-plane! 😂✈️"
+        }
+      ],
+      "humaneval": [
+        {
+          "test_id": "he_001",
+          "category": "basic",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 172104.5,
+          "details": "Runtime error: NameError: name 'is_palindrome' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_002",
+          "category": "basic",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 172188.7,
+          "details": "Runtime error: NameError: name 'two_sum' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_003",
+          "category": "algorithm",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 171925.5,
+          "details": "Runtime error: NameError: name 'longest_common_subsequence' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_004",
+          "category": "algorithm",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 171410.6,
+          "details": "Runtime error: NameError: name 'max_subarray_sum' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_005",
+          "category": "data_structure",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 32380.7,
+          "details": "All tests passed",
+          "response": "def is_valid_parentheses(s: str) -> bool:\n    \"\"\"Check if the input string has valid parentheses.\n    >>> is_valid_parentheses('()')\n    True\n    >>> is_valid_parentheses('()[]{}')\n    True\n    >>> is_valid_parentheses('(]')\n    False\n    >>> is_valid_parentheses('([)]')\n    False\n    >>> is_valid_parentheses('{[]}')\n    True\n    \"\"\"\n    stack = []\n    mapping = {')': '(', ']': '[', '}': '{'}\n    for char in s:\n        if char in mapping:\n            top_element = stack.pop() if stack else '#'\n            if mapping[char] != top_element:\n                return False\n        else:\n            stack.append(char)\n    return not stack"
+        },
+        {
+          "test_id": "he_006",
+          "category": "data_structure",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 173716.2,
+          "details": "Runtime error: NameError: name 'group_anagrams' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_007",
+          "category": "string",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 90790.7,
+          "details": "All tests passed",
+          "response": "def roman_to_int(s: str) -> int:\n    \"\"\"Convert a Roman numeral string to an integer.\n    >>> roman_to_int('III')\n    3\n    >>> roman_to_int('LVIII')\n    58\n    >>> roman_to_int('MCMXCIV')\n    1994\n    \"\"\"\n    roman_map = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}\n    total = 0\n    for i in range(len(s)):\n        value = roman_map[s[i]]\n        if i + 1 < len(s) and value < roman_map[s[i + 1]]:\n            total -= value\n        else:\n            total += value\n    return total"
+        },
+        {
+          "test_id": "he_008",
+          "category": "math",
+          "target": "Ollama",
+          "label": "ollama",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 171605.7,
+          "details": "Runtime error: NameError: name 'count_primes' is not defined",
+          "response": ""
+        }
+      ]
+    }
+  },
+  "summary": {
+    "kv-int8": {
+      "bfcl_pass_rate": 0.8333333333333334,
+      "bfcl_avg_score": 0.9583333333333334,
+      "humaneval_pass_rate": 1.0,
+      "humaneval_avg_score": 1.0,
+      "total_pass_rate": 0.9285714285714286
+    },
+    "ollama": {
+      "bfcl_pass_rate": 1.0,
+      "bfcl_avg_score": 1.0,
+      "humaneval_pass_rate": 0.25,
+      "humaneval_avg_score": 0.25,
+      "total_pass_rate": 0.5714285714285714
+    }
+  }
+}

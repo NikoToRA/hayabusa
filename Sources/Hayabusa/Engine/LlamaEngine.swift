@@ -20,6 +20,7 @@ final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
     let modelDescription: String
     let slotCount: Int
+    private let isGemmaModel: Bool
 
     // --- Scheduler state (accessed only on queue) ---
     private var pendingJobs: [GenerationJob] = []
@@ -60,16 +61,32 @@ final class LlamaEngine: InferenceEngine, @unchecked Sendable {
         self.slotCount = slotCount
         self.perSlotCtx = perSlotCtx
 
+        // Detect model architecture for optimized parameters
+        let isGemma4 = self.modelDescription.lowercased().contains("gemma4")
+            || self.modelDescription.lowercased().contains("gemma-4")
+            || modelPath.lowercased().contains("gemma-4")
+            || modelPath.lowercased().contains("gemma4")
+        self.isGemmaModel = isGemma4 || modelPath.lowercased().contains("gemma")
+
         var ctxParams = llama_context_default_params()
         let nBatch: Int32 = 2048
         ctxParams.n_ctx = perSlotCtx * UInt32(slotCount)
         ctxParams.n_seq_max = UInt32(slotCount)
         ctxParams.n_batch = UInt32(nBatch)
+        ctxParams.n_ubatch = UInt32(nBatch)  // match ubatch to batch for Metal throughput
         ctxParams.offload_kqv = true
-        ctxParams.swa_full = true
-        let nThreads = Int32(max(1, min(8, ProcessInfo.processInfo.processorCount - 2)))
+        ctxParams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED  // Force FA on for all models
+
+        // SWA optimization: Gemma 4 uses interleaved sliding window attention.
+        // swa_full=false lets SWA layers use only the sliding window during prefill,
+        // dramatically reducing compute for long prompts.
+        ctxParams.swa_full = isGemma4 ? false : true
+
+        let nCores = Int32(ProcessInfo.processInfo.processorCount)
+        let nThreads = Int32(max(1, min(8, nCores - 2)))
         ctxParams.n_threads = nThreads
-        ctxParams.n_threads_batch = nThreads
+        // Use more threads for batch prefill (CPU-heavy phase)
+        ctxParams.n_threads_batch = Int32(max(nThreads, min(nCores - 1, 12)))
 
         // Apply KV cache quantization if configured
         let kvQuantizer = KVCacheQuantizer(mode: KVCacheQuantizerConfig.shared.mode)
@@ -385,9 +402,27 @@ final class LlamaEngine: InferenceEngine, @unchecked Sendable {
 
     private func formatChatML(messages: [ChatMessage]) -> String {
         if let formatted = tryApplyTemplate(messages: messages) {
-            return formatted + "<think>\n</think>\n"
+            // Only add think tokens for models that support thinking mode (e.g. Qwen3.5)
+            // Gemma 4 does not use <think> tags — appending them wastes tokens and confuses the model
+            if !isGemmaModel {
+                return formatted + "<think>\n</think>\n"
+            }
+            return formatted
         }
 
+        // Fallback: construct prompt manually based on model family
+        if isGemmaModel {
+            // Gemma format: <start_of_turn>role\ncontent<end_of_turn>
+            var prompt = ""
+            for msg in messages {
+                let role = msg.role == "assistant" ? "model" : msg.role
+                prompt += "<start_of_turn>\(role)\n\(msg.content)<end_of_turn>\n"
+            }
+            prompt += "<start_of_turn>model\n"
+            return prompt
+        }
+
+        // ChatML fallback (Qwen, etc.)
         var prompt = ""
         for msg in messages {
             prompt += "<|im_start|>\(msg.role)\n\(msg.content)<|im_end|>\n"
