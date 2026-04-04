@@ -5,20 +5,27 @@ import CLlama
 enum KVQuantizeMode: String {
     case off       // float16 (default)
     case int8      // Q8_0 quantization (~50% memory reduction)
+    case tq3       // TQ3_0 TurboQuant 3-bit (~78% memory reduction)
+    case tq4       // TQ4_0 TurboQuant 4-bit (~72% memory reduction)
 
     /// Returns the GGML type for KV cache keys.
     var keyType: ggml_type {
         switch self {
         case .off:  return GGML_TYPE_F16
         case .int8: return GGML_TYPE_Q8_0
+        case .tq3:  return GGML_TYPE_TQ3_0
+        case .tq4:  return GGML_TYPE_TQ4_0
         }
     }
 
     /// Returns the GGML type for KV cache values.
+    /// Both K and V caches use the same quantization type since Metal FA kernels now exist for TQ3/TQ4.
     var valueType: ggml_type {
         switch self {
         case .off:  return GGML_TYPE_F16
         case .int8: return GGML_TYPE_Q8_0
+        case .tq3:  return GGML_TYPE_TQ3_0
+        case .tq4:  return GGML_TYPE_TQ4_0
         }
     }
 
@@ -26,6 +33,8 @@ enum KVQuantizeMode: String {
         switch self {
         case .off:  return "float16 (default)"
         case .int8: return "int8 (Q8_0, ~50% memory savings)"
+        case .tq3:  return "tq3 (TQ3_0, 3-bit TurboQuant, ~78% memory savings)"
+        case .tq4:  return "tq4 (TQ4_0, 4-bit TurboQuant, ~72% memory savings)"
         }
     }
 }
@@ -50,6 +59,11 @@ struct KVCacheQuantizer {
     func apply(to params: inout llama_context_params) {
         params.type_k = mode.keyType
         params.type_v = mode.valueType
+
+        // TurboQuant: Both K and V caches quantized, Metal FA kernels accelerate attention.
+        if mode == .tq3 || mode == .tq4 {
+            print("[KVCache] TurboQuant: K=\(mode.rawValue), V=\(mode.rawValue) (Metal FA accelerated)")
+        }
     }
 
     /// Estimate memory savings compared to float16.
@@ -59,25 +73,28 @@ struct KVCacheQuantizer {
         nHeads: Int,
         headDim: Int
     ) -> KVMemoryEstimate {
-        let bytesPerElement: Int
         let baselineBytesPerElement = 2 // float16
-
-        switch mode {
-        case .off:
-            bytesPerElement = 2
-        case .int8:
-            // Q8_0: 1 byte per element + scale overhead (~2 bytes per 32 elements)
-            bytesPerElement = 1
-        }
 
         // KV cache size = 2 (K+V) * n_ctx * n_layers * n_heads * head_dim * bytes_per_element
         let totalElements = 2 * Int(nCtx) * nLayers * nHeads * headDim
         let baselineBytes = totalElements * baselineBytesPerElement
-        let quantizedBytes = totalElements * bytesPerElement
 
-        // Account for scale factor overhead in Q8_0 (1 float16 per 32 elements)
-        let scaleOverhead = mode == .int8 ? (totalElements / 32) * 2 : 0
-        let actualQuantizedBytes = quantizedBytes + scaleOverhead
+        // Calculate actual quantized bytes including scale overhead
+        let actualQuantizedBytes: Int
+        switch mode {
+        case .off:
+            actualQuantizedBytes = totalElements * 2
+        case .int8:
+            // Q8_0: 1 byte per element + 2 bytes scale per 32 elements
+            let scaleOverhead = (totalElements / 32) * 2
+            actualQuantizedBytes = totalElements * 1 + scaleOverhead
+        case .tq3:
+            // K=TQ3_0 (14 bytes/32 elements) + V=TQ3_0 (14 bytes/32 elements)
+            actualQuantizedBytes = (totalElements / 32) * 14
+        case .tq4:
+            // K=TQ4_0 (18 bytes/32 elements) + V=TQ4_0 (18 bytes/32 elements)
+            actualQuantizedBytes = (totalElements / 32) * 18
+        }
 
         return KVMemoryEstimate(
             baselineBytes: Int64(baselineBytes),

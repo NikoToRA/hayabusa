@@ -1,0 +1,174 @@
+{
+  "timestamp": "2026-04-02T17:07:53",
+  "results": {
+    "kv-int8": {
+      "bfcl": [
+        {
+          "test_id": "bfcl_simple_01",
+          "category": "simple",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2166.2,
+          "details": "Function 'get_weather' found; Arg 'city=Tokyo' found",
+          "response": "```json\n{\n  \"name\": \"get_weather\",\n  \"arguments\": {\n    \"city\": \"Tokyo\"\n  }\n}\n```"
+        },
+        {
+          "test_id": "bfcl_simple_02",
+          "category": "simple",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 1999.4,
+          "details": "Function 'calculate' found; Arg 'expression=355/113' found; Arg 'precision=6' found",
+          "response": "```json\n{\"name\": \"calculate\", \"parameters\": {\"expression\": \"355/113\", \"precision\": 6}}\n```"
+        },
+        {
+          "test_id": "bfcl_multiple_01",
+          "category": "multiple",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2741.7,
+          "details": "Function 'search_web' found; Arg 'query=Rust programming language' found; Arg 'max_results=5' found",
+          "response": "```json\n{\n  \"name\": \"search_web\",\n  \"parameters\": {\n    \"query\": \"Rust programming language\",\n    \"max_results\": 5\n  }\n}\n```"
+        },
+        {
+          "test_id": "bfcl_parallel_01",
+          "category": "parallel",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 3156.7,
+          "details": "Function 'get_stock_price' found; Parallel calls: 3/3",
+          "response": "```json\n[\n  {\"name\": \"get_stock_price\", \"parameters\": {\"symbol\": \"AAPL\"}},\n  {\"name\": \"get_stock_price\", \"parameters\": {\"symbol\": \"GOOGL\"}},\n  {\"name\": \"get_stock_price\", \"parameters\": {\"symbol\": \"MSFT\"}}\n]\n```"
+        },
+        {
+          "test_id": "bfcl_irrelevance_01",
+          "category": "irrelevance",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 6247.9,
+          "details": "Correctly avoided function call",
+          "response": "The meaning of life is one of humanity's oldest and most profound questions, and there isn't a single definitive answer. Different perspectives offer various insights:\n\n**Philosophical Views:**\n- **Existentialism**: Life has no inherent meaning, but we create our own purpose through choices and actions.\n- **Nihilism**: Life may have no intrinsic meaning, but this can be liberating rather than depressing.\n- **Humanism**: Meaning comes from human connection, creativity, and contributing to society.\n- **Religious/Spiritual**: Many traditions suggest meaning comes from connecting with the divine or fulfilling a spiritual purpose.\n\n**Practical Perspectives:**\n- Finding joy in daily experiences\n- Building meaningful relationships\n- Creating something (art, knowledge, community)\n- Helping others and making a positive impact\n- Pursuing personal growth and learning\n\nUltimately, the meaning of life is something each person discovers through their own experiences, values, and choices. What matters most is what brings you fulfillment and purpose.\n\nIs there a particular aspect of this question you'd like to explore further?"
+        },
+        {
+          "test_id": "bfcl_irrelevance_02",
+          "category": "irrelevance",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": true,
+          "score": 1.0,
+          "latency_ms": 2884.2,
+          "details": "Correctly avoided function call",
+          "response": "Here's a joke about airplanes for you:\n\nWhy don't airplanes ever get lost?\n\nBecause they always know where they're going... and they're never afraid to take a wrong turn! ✈️😄\n\nOr here's another one:\n\nWhat do you call an airplane that tells jokes?\n\nA pun-plane! 😂✈️"
+        }
+      ],
+      "humaneval": [
+        {
+          "test_id": "he_001",
+          "category": "basic",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10899.5,
+          "details": "Runtime error: NameError: name 'is_palindrome' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_002",
+          "category": "basic",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10939.7,
+          "details": "Runtime error: NameError: name 'two_sum' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_003",
+          "category": "algorithm",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10927.7,
+          "details": "Runtime error: NameError: name 'longest_common_subsequence' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_004",
+          "category": "algorithm",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10938.6,
+          "details": "Runtime error: NameError: name 'max_subarray_sum' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_005",
+          "category": "data_structure",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10935.3,
+          "details": "Runtime error: NameError: name 'is_valid_parentheses' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_006",
+          "category": "data_structure",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10956.9,
+          "details": "Runtime error: NameError: name 'group_anagrams' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_007",
+          "category": "string",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10914.6,
+          "details": "Runtime error: NameError: name 'roman_to_int' is not defined",
+          "response": ""
+        },
+        {
+          "test_id": "he_008",
+          "category": "math",
+          "target": "Ollama",
+          "label": "kv-int8",
+          "passed": false,
+          "score": 0.0,
+          "latency_ms": 10905.2,
+          "details": "Runtime error: NameError: name 'count_primes' is not defined",
+          "response": ""
+        }
+      ]
+    }
+  },
+  "summary": {
+    "kv-int8": {
+      "bfcl_pass_rate": 1.0,
+      "bfcl_avg_score": 1.0,
+      "humaneval_pass_rate": 0.0,
+      "humaneval_avg_score": 0.0,
+      "total_pass_rate": 0.42857142857142855
+    }
+  }
+}
