@@ -16,6 +16,17 @@ Hayabusa is a high-performance LLM inference server built from scratch in Swift,
 
 ## Performance
 
+### NEW: Hayabusa vs Ollama — Gemma 4 E4B (2026-04-04)
+
+| Concurrency | Hayabusa | Ollama v0.20 | Ratio |
+|-------------|----------|-------------|-------|
+| 1 | **137.1 tok/s** | 123.5 tok/s | **1.11x** |
+| 4 | **190.6 tok/s** | 137.2 tok/s | **1.39x** |
+| 8 | **191.8 tok/s** | 136.5 tok/s | **1.40x** |
+| 16 | **189.0 tok/s** | 137.1 tok/s | **1.38x** |
+
+> Gemma 4 E4B Q8_0, max_tokens=128. Raw data: `scripts/bench_gemma4.json`
+
 ### Hayabusa vs Ollama (Qwen3.5-9B, same model, same hardware)
 
 | Metric | Hayabusa | Ollama | Improvement |
@@ -60,6 +71,18 @@ Hayabusa is a high-performance LLM inference server built from scratch in Swift,
 > llama.cpp has higher throughput with continuous batching; MLX uses ~45% less memory.
 > Raw data: `scripts/bench_qwen35_final.json`
 
+## Model Compatibility
+
+| Model | llama.cpp backend | MLX backend | Notes |
+|-------|:-:|:-:|-------|
+| Qwen3.5-9B | Yes | Yes | Best for structured output (SOAP, JSON) |
+| Gemma 4 E4B | **Yes** | No* | Fastest throughput (191 tok/s) |
+| Gemma 4 26B-A4B | **Yes** | No* | MoE, only 4B active params |
+| Gemma 3 | Yes | Yes | |
+| Llama 3 | Yes | Yes | |
+
+> *Gemma 4 MLX support pending upstream [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm). If you pass a Gemma 4 model with `--backend mlx`, Hayabusa will auto-suggest switching to llama.cpp backend.
+
 ## Features
 
 - **Swift Native** -- zero Python overhead, direct Metal GPU access
@@ -94,6 +117,9 @@ cd ../..
 huggingface-cli download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf \
   --local-dir models/
 
+# Google Gemma 4 E4B (recommended: Q8_0 for best speed on Apple Silicon)
+python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download('ggml-org/gemma-4-E4B-it-GGUF', 'gemma-4-e4b-it-Q8_0.gguf', local_dir='models')"
+
 # MLX (auto-downloaded from HuggingFace on first run)
 # Just pass the model ID: mlx-community/Qwen3.5-9B-MLX-4bit
 ```
@@ -104,8 +130,11 @@ huggingface-cli download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf \
 # Build
 swift build
 
-# Run with llama.cpp backend
+# Run with llama.cpp backend (Qwen3.5)
 .build/debug/Hayabusa models/Qwen3.5-9B-Q4_K_M.gguf --backend llama
+
+# Run with Gemma 4 (191 tok/s, fastest)
+.build/release/Hayabusa models/gemma-4-e4b-it-Q8_0.gguf
 
 # Run with MLX backend
 .build/debug/Hayabusa mlx-community/Qwen3.5-9B-MLX-4bit --backend mlx
