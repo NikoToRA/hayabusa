@@ -284,6 +284,12 @@ class Gemma4TransformerBlock: Module {
     @ModuleInfo(key: "pre_feedforward_layernorm") var preFeedforwardLayerNorm: Gemma4RMSNorm
     @ModuleInfo(key: "post_feedforward_layernorm") var postFeedforwardLayerNorm: Gemma4RMSNorm
 
+    // Per-layer embedding components (E4B: hidden_size_per_layer_input > 0)
+    @ModuleInfo(key: "layer_scalar") var layerScalar: MLXArray
+    @ModuleInfo(key: "per_layer_input_gate") var perLayerInputGate: Linear
+    @ModuleInfo(key: "per_layer_projection") var perLayerProjection: Linear
+    @ModuleInfo(key: "post_per_layer_input_norm") var postPerLayerInputNorm: Gemma4RMSNorm
+
     init(_ config: Gemma4TextConfiguration, layerIdx: Int) {
         self._selfAttention.wrappedValue = Gemma4Attention(config, layerIdx: layerIdx)
         self.mlp = Gemma4MLP(
@@ -292,6 +298,16 @@ class Gemma4TransformerBlock: Module {
         self._postAttentionLayerNorm.wrappedValue = Gemma4RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
         self._preFeedforwardLayerNorm.wrappedValue = Gemma4RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
         self._postFeedforwardLayerNorm.wrappedValue = Gemma4RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+
+        // Per-layer embedding: input is per_layer vocab (262144) → hidden_size_per_layer_input (256) → hidden_size
+        // per_layer_input_gate: (hidden_size_per_layer_input, hidden_size) projects from per-layer embedding space
+        let perLayerDim = 256  // hidden_size_per_layer_input from config (E4B=256)
+        self._layerScalar.wrappedValue = MLXArray.ones([1])
+        // per_layer_input_gate: hiddenSize → perLayerDim (gate)
+        self._perLayerInputGate.wrappedValue = Linear(config.hiddenSize, perLayerDim, bias: false)
+        // per_layer_projection: perLayerDim → hiddenSize (project back)
+        self._perLayerProjection.wrappedValue = Linear(perLayerDim, config.hiddenSize, bias: false)
+        self._postPerLayerInputNorm.wrappedValue = Gemma4RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
         super.init()
     }
 
@@ -316,6 +332,9 @@ class Gemma4TransformerBlock: Module {
 
 public class Gemma4Model: Module {
     @ModuleInfo(key: "embed_tokens") var embedTokens: Embedding
+    @ModuleInfo(key: "embed_tokens_per_layer") var embedTokensPerLayer: Embedding
+    @ModuleInfo(key: "per_layer_model_projection") var perLayerModelProjection: Linear
+    @ModuleInfo(key: "per_layer_projection_norm") var perLayerProjectionNorm: Gemma4RMSNorm
     @ModuleInfo var layers: [Gemma4TransformerBlock]
     @ModuleInfo var norm: Gemma4RMSNorm
 
@@ -323,10 +342,19 @@ public class Gemma4Model: Module {
 
     init(_ config: Gemma4TextConfiguration) {
         self.config = config
+        let perLayerDim = 256
         self._embedTokens.wrappedValue = Embedding(
             embeddingCount: config.vocabularySize,
             dimensions: config.hiddenSize
         )
+        // Per-layer embeddings: all layers packed [vocab, perLayerDim * hiddenLayers]
+        self._embedTokensPerLayer.wrappedValue = Embedding(
+            embeddingCount: config.vocabularySize,
+            dimensions: perLayerDim * config.hiddenLayers
+        )
+        // Per-layer projection: all layers packed into one tensor [perLayerDim * hiddenLayers, hiddenSize]
+        self._perLayerModelProjection.wrappedValue = Linear(config.hiddenSize, perLayerDim * config.hiddenLayers, bias: false)
+        self._perLayerProjectionNorm.wrappedValue = Gemma4RMSNorm(dimensions: perLayerDim, eps: config.rmsNormEps)
         self._layers.wrappedValue = (0 ..< config.hiddenLayers).map { layerIdx in
             Gemma4TransformerBlock(config, layerIdx: layerIdx)
         }
@@ -371,7 +399,7 @@ public class Gemma4Model: Module {
 
 public class Gemma4TextModel: Module, LanguageModel {
     @ModuleInfo public var model: Gemma4Model
-    @ModuleInfo(key: "lm_head") var lmHead: Linear?
+    @ModuleInfo(key: "lm_head") var lmHead: Linear
 
     public let config: Gemma4TextConfiguration
     public var vocabularySize: Int { config.vocabularySize }
@@ -379,21 +407,16 @@ public class Gemma4TextModel: Module, LanguageModel {
     public init(_ config: Gemma4TextConfiguration) {
         self.config = config
         self.model = Gemma4Model(config)
-        if !config.tieWordEmbeddings {
-            self._lmHead.wrappedValue = Linear(config.hiddenSize, config.vocabularySize, bias: false)
-        }
+        // Always create lm_head — even with tied embeddings, quantized models
+        // store separate lm_head weights (scales/biases/weight)
+        self._lmHead.wrappedValue = Linear(config.hiddenSize, config.vocabularySize, bias: false)
         super.init()
     }
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
         var out = model(inputs, mask: nil, cache: cache)
 
-        // Use tied embeddings or separate lm_head
-        if let lmHead {
-            out = lmHead(out)
-        } else {
-            out = model.embedTokens.asLinear(out)
-        }
+        out = lmHead(out)
 
         // Final logit softcapping
         if let cap = config.finalLogitSoftcapping, cap > 0 {
