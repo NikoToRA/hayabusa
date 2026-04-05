@@ -249,7 +249,7 @@ final class MLXEngine: InferenceEngine, @unchecked Sendable {
 
         if modified {
             json["quantization"] = newQuant
-            if var qc = json["quantization_config"] as? [String: Any] {
+            if let qc = json["quantization_config"] as? [String: Any] {
                 var newQC = [String: Any]()
                 for (key, value) in qc {
                     if key.hasPrefix("language_model.") {

@@ -471,7 +471,7 @@ class Gemma4TransformerBlock: Module {
            let norm1 = postFeedforwardLayerNorm1,
            let norm2 = postFeedforwardLayerNorm2,
            let preNorm2 = preFeedforwardLayerNorm2 {
-            // MoE path: shared MLP + routed experts in parallel (temporarily disabled for debug)
+            // MoE path: shared MLP + routed experts in parallel
             let h1 = norm1(mlp(preFeedforwardLayerNorm(h)))
             let (indices, weights) = router(h)
             let h2 = norm2(experts(preNorm2(h), indices: indices, weights: weights))
