@@ -13,19 +13,18 @@ enum KVQuantizeMode: String {
         switch self {
         case .off:  return GGML_TYPE_F16
         case .int8: return GGML_TYPE_Q8_0
-        case .tq3:  return GGML_TYPE_TQ3_0
-        case .tq4:  return GGML_TYPE_TQ4_0
+        case .tq3:  fatalError("TurboQuant TQ3_0 not available in this llama.cpp build")
+        case .tq4:  fatalError("TurboQuant TQ4_0 not available in this llama.cpp build")
         }
     }
 
     /// Returns the GGML type for KV cache values.
-    /// Both K and V caches use the same quantization type since Metal FA kernels now exist for TQ3/TQ4.
     var valueType: ggml_type {
         switch self {
         case .off:  return GGML_TYPE_F16
         case .int8: return GGML_TYPE_Q8_0
-        case .tq3:  return GGML_TYPE_TQ3_0
-        case .tq4:  return GGML_TYPE_TQ4_0
+        case .tq3:  fatalError("TurboQuant TQ3_0 not available in this llama.cpp build")
+        case .tq4:  fatalError("TurboQuant TQ4_0 not available in this llama.cpp build")
         }
     }
 
