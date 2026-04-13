@@ -46,6 +46,9 @@ public struct Gemma4TextConfiguration: Codable {
     // k_eq_v: full attention layers share k_proj output as values (26B/31B)
     let attentionKEqV: Bool
 
+    // double-wide MLP for KV-shared layers
+    let useDoubleWideMlp: Bool
+
     struct RopeParameters: Codable {
         let fullAttention: AttentionRopeConfig?
         let slidingAttention: AttentionRopeConfig?
@@ -92,6 +95,7 @@ public struct Gemma4TextConfiguration: Codable {
         case topKExperts = "top_k_experts"
         case moeIntermediateSize = "moe_intermediate_size"
         case attentionKEqV = "attention_k_eq_v"
+        case useDoubleWideMlp = "use_double_wide_mlp"
     }
 
     enum VLMCodingKeys: String, CodingKey {
@@ -131,11 +135,19 @@ public struct Gemma4TextConfiguration: Codable {
         topKExperts = try container.decodeIfPresent(Int.self, forKey: .topKExperts)
         moeIntermediateSize = try container.decodeIfPresent(Int.self, forKey: .moeIntermediateSize)
         attentionKEqV = try container.decodeIfPresent(Bool.self, forKey: .attentionKEqV) ?? false
+        useDoubleWideMlp = try container.decodeIfPresent(Bool.self, forKey: .useDoubleWideMlp) ?? true
     }
 
     func isFullAttention(layer: Int) -> Bool {
         guard layer < layerTypes.count else { return false }
         return layerTypes[layer] == "full_attention"
+    }
+
+    /// Effective MLP intermediate size for a given layer (double-wide for KV-shared layers)
+    func effectiveIntermediateSize(layer: Int) -> Int {
+        guard useDoubleWideMlp, numKVSharedLayers > 0 else { return intermediateSize }
+        let kvFromStart = hiddenLayers - numKVSharedLayers
+        return layer >= kvFromStart ? intermediateSize * 2 : intermediateSize
     }
 
     /// Index of the KV source layer for shared KV cache
@@ -163,7 +175,75 @@ class Gemma4RMSNorm: Module, UnaryLayer {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        MLXFast.rmsNorm(x, weight: 1.0 + weight, eps: eps)
+        // MLX-community models store weights with +1 offset already applied
+        MLXFast.rmsNorm(x, weight: weight, eps: eps)
+    }
+}
+
+// MARK: - Proportional RoPE (Gemma 4 full-attention layers)
+
+/// Proportional RoPE for Gemma 4 full-attention layers.
+/// Frequencies are computed relative to the full head dimension,
+/// and rotation is applied to a partial subset of dimensions.
+class ProportionalRoPE {
+    let dims: Int
+    let rotatedDims: Int
+    let freqs: MLXArray?
+    let traditional: Bool
+
+    init(dims: Int, traditional: Bool = false, base: Float = 10000.0, partialRotaryFactor: Float = 1.0) {
+        self.dims = dims
+        self.traditional = traditional
+
+        let ropeAngles = Int(partialRotaryFactor * Float(dims) / 2.0)
+        self.rotatedDims = 2 * ropeAngles
+
+        if rotatedDims > 0 {
+            let exponents = MLXArray(stride(from: Float(0), to: Float(rotatedDims), by: 2)) / Float(dims)
+            // factor = 1.0 for default proportional
+            self.freqs = pow(MLXArray(base), exponents)
+        } else {
+            self.freqs = nil
+        }
+    }
+
+    func callAsFunction(_ x: MLXArray, offset: Int) -> MLXArray {
+        guard rotatedDims > 0, let freqs else { return x }
+
+        let half = dims / 2
+        let rotHalf = rotatedDims / 2
+
+        // x shape: [B, nHeads, L, headDim]
+        // Split head dimension into left/right halves
+        let left = x[0..., 0..., 0..., ..<half]
+        let right = x[0..., 0..., 0..., half ..< dims]
+
+        // Gather rotatable parts from both halves
+        let rotated = concatenated(
+            [left[0..., 0..., 0..., ..<rotHalf], right[0..., 0..., 0..., ..<rotHalf]],
+            axis: -1
+        )
+
+        let rotatedResult = MLXFast.RoPE(
+            rotated,
+            dimensions: rotatedDims,
+            traditional: traditional,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: freqs
+        )
+
+        // Reassemble left and right with rotated parts
+        let newLeft = concatenated(
+            [rotatedResult[0..., 0..., 0..., ..<rotHalf], left[0..., 0..., 0..., rotHalf ..< half]],
+            axis: -1
+        )
+        let newRight = concatenated(
+            [rotatedResult[0..., 0..., 0..., rotHalf ..< rotatedDims], right[0..., 0..., 0..., rotHalf ..< half]],
+            axis: -1
+        )
+        return concatenated([newLeft, newRight], axis: -1)
     }
 }
 
@@ -185,7 +265,9 @@ class Gemma4Attention: Module {
     @ModuleInfo(key: "q_norm") var queryNorm: Gemma4RMSNorm
     @ModuleInfo(key: "k_norm") var keyNorm: Gemma4RMSNorm
     @ModuleInfo(key: "v_norm") var valueNorm: Gemma4RMSNormNoScale?
-    @ModuleInfo var rope: RoPE
+
+    let ropeStandard: RoPE?
+    let ropeProportional: ProportionalRoPE?
 
     init(_ config: Gemma4TextConfiguration, layerIdx: Int, useKEqV: Bool = false) {
         self.isFullAttention = config.isFullAttention(layer: layerIdx)
@@ -217,23 +299,36 @@ class Gemma4Attention: Module {
 
         self._queryNorm.wrappedValue = Gemma4RMSNorm(dimensions: effectiveHeadDim, eps: config.rmsNormEps)
         self._keyNorm.wrappedValue = Gemma4RMSNorm(dimensions: effectiveHeadDim, eps: config.rmsNormEps)
-        // v_norm: used in 26B for normalizing values (no learnable weight)
-        if config.enableMoeBlock {
-            self._valueNorm.wrappedValue = Gemma4RMSNormNoScale(dimensions: effectiveHeadDim, eps: config.rmsNormEps)
-        }
+        // v_norm: RMSNormNoScale applied to values in all model variants
+        self._valueNorm.wrappedValue = Gemma4RMSNormNoScale(dimensions: effectiveHeadDim, eps: config.rmsNormEps)
 
         // RoPE configuration
         if isFullAttention {
             let partialFactor = config.ropeParameters?.fullAttention?.partialRotaryFactor ?? 0.25
             let ropeTheta = config.ropeParameters?.fullAttention?.ropeTheta ?? 1_000_000.0
-            let ropeDims = Int(Float(effectiveHeadDim) * partialFactor)
-            self.rope = RoPE(dimensions: ropeDims, traditional: false, base: ropeTheta)
+            self.ropeProportional = ProportionalRoPE(
+                dims: effectiveHeadDim,
+                traditional: false,
+                base: ropeTheta,
+                partialRotaryFactor: partialFactor
+            )
+            self.ropeStandard = nil
         } else {
             let ropeTheta = config.ropeParameters?.slidingAttention?.ropeTheta ?? 10_000.0
-            self.rope = RoPE(dimensions: effectiveHeadDim, traditional: false, base: ropeTheta)
+            self.ropeStandard = RoPE(dimensions: effectiveHeadDim, traditional: false, base: ropeTheta)
+            self.ropeProportional = nil
         }
 
         super.init()
+    }
+
+    private func applyRoPE(_ x: MLXArray, offset: Int) -> MLXArray {
+        if let rope = ropeProportional {
+            return rope.callAsFunction(x, offset: offset)
+        } else if let rope = ropeStandard {
+            return rope(x, offset: offset)
+        }
+        return x
     }
 
     func callAsFunction(
@@ -267,8 +362,8 @@ class Gemma4Attention: Module {
         }
 
         let offset = cache?.offset ?? 0
-        queries = rope(queries, offset: offset)
-        keys = rope(keys, offset: offset)
+        queries = applyRoPE(queries, offset: offset)
+        keys = applyRoPE(keys, offset: offset)
 
         let output = attentionWithCacheUpdate(
             queries: queries,
@@ -349,11 +444,11 @@ class Gemma4Router: Module {
         h = h * scale
 
         let expertScores = proj(h)
-        let routerProbs = softmax(expertScores, axis: -1)
 
+        // Top-k selection, then softmax over top-k raw scores only (not all experts)
         let topKIndices = argPartition(-expertScores, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
-        var topKWeights = takeAlong(routerProbs, topKIndices, axis: -1)
-        topKWeights = topKWeights / sum(topKWeights, axis: -1, keepDims: true)
+        var topKWeights = takeAlong(expertScores, topKIndices, axis: -1)
+        topKWeights = softmax(topKWeights, axis: -1)
         topKWeights = topKWeights * perExpertScale[topKIndices]
 
         return (topKIndices, topKWeights)
@@ -377,16 +472,17 @@ class Gemma4Experts: Module {
     }
 
     func callAsFunction(_ x: MLXArray, indices: MLXArray, weights: MLXArray) -> MLXArray {
+        // x: (B, S, H), indices: (B, S, K), weights: (B, S, K)
         let (B, S, H) = (x.dim(0), x.dim(1), x.dim(2))
         let K = indices.dim(-1)
 
         let xFlat = x.reshaped(B * S, H)
         let indicesFlat = indices.reshaped(B * S, K)
 
-        let expertOut = switchGLU(xFlat, indicesFlat)
+        let expertOut = switchGLU(xFlat, indicesFlat)  // (B*S, K, H)
 
-        let w = weights.reshaped(B * S, K)[.ellipsis, .newAxis]
-        return (expertOut * w).sum(axis: -2).reshaped(B, S, H)
+        let w = weights.reshaped(B * S, K)[.ellipsis, .newAxis]  // (B*S, K, 1)
+        return (expertOut * w).sum(axis: -2).reshaped(B, S, H)   // (B, S, H)
     }
 }
 
@@ -427,7 +523,7 @@ class Gemma4TransformerBlock: Module {
         let isKEqV = config.attentionKEqV && config.isFullAttention(layer: layerIdx)
         self._selfAttention.wrappedValue = Gemma4Attention(config, layerIdx: layerIdx, useKEqV: isKEqV)
         self.mlp = Gemma4MLP(
-            dimensions: config.hiddenSize, hiddenDimensions: config.intermediateSize)
+            dimensions: config.hiddenSize, hiddenDimensions: config.effectiveIntermediateSize(layer: layerIdx))
         self._inputLayerNorm.wrappedValue = Gemma4RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
         self._postAttentionLayerNorm.wrappedValue = Gemma4RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
         self._preFeedforwardLayerNorm.wrappedValue = Gemma4RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
@@ -464,26 +560,34 @@ class Gemma4TransformerBlock: Module {
         let inputNorm = inputLayerNorm(x)
         let r = selfAttention(inputNorm, mask: mask, cache: cache)
         let attnNorm = postAttentionLayerNorm(r)
-        let h = x + attnNorm
+        var h = x + attnNorm
 
         // Feed-forward block
+        let residual = h
+
         if enableMoE, let router, let experts,
            let norm1 = postFeedforwardLayerNorm1,
            let norm2 = postFeedforwardLayerNorm2,
            let preNorm2 = preFeedforwardLayerNorm2 {
             // MoE path: shared MLP + routed experts in parallel
             let h1 = norm1(mlp(preFeedforwardLayerNorm(h)))
+
+            // Router and experts operate on h (= residual, before MLP)
             let (indices, weights) = router(h)
             let h2 = norm2(experts(preNorm2(h), indices: indices, weights: weights))
-            let ffOut = postFeedforwardLayerNorm(h1 + h2)
-            return h + ffOut
+
+            h = postFeedforwardLayerNorm(h1 + h2)
         } else {
-            // Dense path (E4B)
-            let preMLPNorm = preFeedforwardLayerNorm(h)
-            let r2 = mlp(preMLPNorm)
-            let postMLPNorm = postFeedforwardLayerNorm(r2)
-            return h + postMLPNorm
+            // Dense path
+            h = postFeedforwardLayerNorm(mlp(preFeedforwardLayerNorm(h)))
         }
+
+        h = residual + h
+
+        // Layer scalar (per-layer output scaling from checkpoint)
+        h = h * layerScalar
+
+        return h
     }
 }
 

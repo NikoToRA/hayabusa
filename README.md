@@ -76,12 +76,12 @@ Hayabusa is a high-performance LLM inference server built from scratch in Swift,
 | Model | llama.cpp backend | MLX backend | Notes |
 |-------|:-:|:-:|-------|
 | Qwen3.5-9B | Yes | Yes | Best for structured output (SOAP, JSON) |
-| Gemma 4 E4B | **Yes** | No* | Fastest throughput (191 tok/s) |
-| Gemma 4 26B-A4B | **Yes** | No* | MoE, only 4B active params |
+| Gemma 4 E4B | **Yes** | **Yes** | Fastest throughput (191 tok/s) |
+| Gemma 4 26B-A4B | **Yes** | **Yes** | MoE, only 4B active params, ~61 tok/s MLX |
 | Gemma 3 | Yes | Yes | |
 | Llama 3 | Yes | Yes | |
 
-> *Gemma 4 MLX support pending upstream [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm). If you pass a Gemma 4 model with `--backend mlx`, Hayabusa will auto-suggest switching to llama.cpp backend.
+> Gemma 4 MLX support is built-in via custom `Gemma4Text.swift` model implementation (ProportionalRoPE, MoE routing, layer scalar, k_eq_v attention). Tested with `mlx-community/gemma-4-26b-a4b-it-4bit`.
 
 ## Features
 
@@ -91,6 +91,7 @@ Hayabusa is a high-performance LLM inference server built from scratch in Swift,
 - **Continuous Batching** -- concurrent request processing with shared KV cache
 - **Priority Scheduler** -- realtime and batch priority lanes
 - **Qwen3.5 Support** -- first MLX-backend server with Qwen3.5 (GatedDeltaNet hybrid architecture)
+- **Gemma 4 MLX Support** -- full Gemma 4 architecture (E4B + 26B MoE) with ProportionalRoPE, thinking channel stripping
 
 ## Quick Start
 

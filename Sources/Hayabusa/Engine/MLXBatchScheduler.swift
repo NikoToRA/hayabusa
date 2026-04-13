@@ -264,8 +264,11 @@ final class MLXBatchScheduler: @unchecked Sendable {
             semaphore.signal()
             Memory.clearCache()
 
+            // Strip Gemma 4 thinking channel tokens from output
+            let cleanedText = Self.stripThinkingChannel(text)
+
             job.continuation.resume(returning: GenerationResult(
-                text: text,
+                text: cleanedText,
                 promptTokens: promptTokens,
                 completionTokens: completionTokens
             ))
@@ -294,5 +297,23 @@ final class MLXBatchScheduler: @unchecked Sendable {
         lock.lock()
         if index < slotStates.count { slotStates[index] = state }
         lock.unlock()
+    }
+
+    /// Strip Gemma 4 thinking channel markers from generated text.
+    /// Gemma 4 models emit `<|channel>thought\n...<channel|>` blocks before the actual response.
+    private static func stripThinkingChannel(_ text: String) -> String {
+        guard text.contains("<|channel>") else { return text }
+
+        var result = text
+        while let startRange = result.range(of: "<|channel>") {
+            if let endRange = result.range(of: "<channel|>", range: startRange.upperBound..<result.endIndex) {
+                result.removeSubrange(startRange.lowerBound..<endRange.upperBound)
+            } else {
+                result.removeSubrange(startRange.lowerBound..<result.endIndex)
+                break
+            }
+        }
+        // Trim leading whitespace/newlines only when channel markers were stripped
+        return result.drop(while: { $0.isWhitespace || $0.isNewline }).description
     }
 }

@@ -22,11 +22,15 @@ final class MLXEngine: InferenceEngine, @unchecked Sendable {
         // Register Gemma 4 model types (not yet in upstream mlx-swift-lm)
         Self.registerGemma4ModelTypes()
 
-        let configuration = Self.resolveModelConfiguration(for: modelId)
-
-        // Fix VLM quantization keys: strip "language_model." prefix
-        if let dir = Self.cachedSnapshotDirectory(for: modelId) {
-            Self.fixQuantizationKeys(in: dir)
+        // Create a temp directory with fixed config.json (stripped "language_model."
+        // prefix from quantization keys) and symlinks to all other model files.
+        // This preserves the original config.json for Python mlx_lm compatibility.
+        let configuration: ModelConfiguration
+        if let sourceDir = Self.cachedSnapshotDirectory(for: modelId),
+           let tempDir = Self.createFixedConfigDirectory(from: sourceDir) {
+            configuration = ModelConfiguration(directory: tempDir)
+        } else {
+            configuration = Self.resolveModelConfiguration(for: modelId)
         }
 
         print("[MLX] Downloading/loading model: \(modelId)")
@@ -225,46 +229,64 @@ final class MLXEngine: InferenceEngine, @unchecked Sendable {
         print("[MLX] Registered Gemma 4 model types (gemma4, gemma4_text)")
     }
 
-    /// Strip "language_model." prefix from quantization keys in config.json
-    private static func fixQuantizationKeys(in modelDirectory: URL) {
-        let configURL = modelDirectory.appendingPathComponent("config.json")
-
+    /// Create a temp directory with a fixed config.json (quantization keys stripped of
+    /// "language_model." prefix) and symlinks to all other model files.
+    /// Returns nil if no fix is needed or on error.
+    private static func createFixedConfigDirectory(from sourceDir: URL) -> URL? {
+        let configURL = sourceDir.appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: configURL),
-              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var quantization = json["quantization"] as? [String: Any] else {
-            return
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        func stripPrefix(_ dict: [String: Any]) -> ([String: Any], Bool) {
+            var result = [String: Any]()
+            var changed = false
+            for (key, value) in dict {
+                if key.hasPrefix("language_model.") {
+                    result[String(key.dropFirst("language_model.".count))] = value
+                    changed = true
+                } else {
+                    result[key] = value
+                }
+            }
+            return (result, changed)
         }
 
         var modified = false
-        var newQuant = [String: Any]()
-        for (key, value) in quantization {
-            if key.hasPrefix("language_model.") {
-                let stripped = String(key.dropFirst("language_model.".count))
-                newQuant[stripped] = value
-                modified = true
-            } else {
-                newQuant[key] = value
-            }
+        if let quant = json["quantization"] as? [String: Any] {
+            let (stripped, changed) = stripPrefix(quant)
+            if changed { json["quantization"] = stripped; modified = true }
+        }
+        if let qc = json["quantization_config"] as? [String: Any] {
+            let (stripped, changed) = stripPrefix(qc)
+            if changed { json["quantization_config"] = stripped; modified = true }
         }
 
-        if modified {
-            json["quantization"] = newQuant
-            if let qc = json["quantization_config"] as? [String: Any] {
-                var newQC = [String: Any]()
-                for (key, value) in qc {
-                    if key.hasPrefix("language_model.") {
-                        newQC[String(key.dropFirst("language_model.".count))] = value
-                    } else {
-                        newQC[key] = value
-                    }
-                }
-                json["quantization_config"] = newQC
-            }
+        guard modified else { return nil }
 
-            if let newData = try? JSONSerialization.data(withJSONObject: json, options: .prettyPrinted) {
-                try? newData.write(to: configURL)
-                print("[MLX] Fixed quantization keys: stripped language_model. prefix")
+        // Create temp directory with fixed config + symlinks to all other files
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hayabusa-mlx-\(UUID().uuidString)")
+        do {
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            let newData = try JSONSerialization.data(withJSONObject: json, options: .prettyPrinted)
+            try newData.write(to: tempDir.appendingPathComponent("config.json"))
+
+            // Symlink all other files from source
+            let items = try FileManager.default.contentsOfDirectory(at: sourceDir, includingPropertiesForKeys: nil)
+            for item in items where item.lastPathComponent != "config.json" {
+                try FileManager.default.createSymbolicLink(
+                    at: tempDir.appendingPathComponent(item.lastPathComponent),
+                    withDestinationURL: item
+                )
             }
+            print("[MLX] Created temp config with fixed quantization keys at \(tempDir.path)")
+            return tempDir
+        } catch {
+            print("[MLX] Failed to create temp config directory: \(error)")
+            try? FileManager.default.removeItem(at: tempDir)
+            return nil
         }
     }
 }
@@ -283,7 +305,23 @@ private struct TokenizerBridge: MLXLMCommon.Tokenizer, @unchecked Sendable {
     var unknownToken: String? { upstream.unknownToken }
     func applyChatTemplate(messages: [[String: any Sendable]], tools: [[String: any Sendable]]?, additionalContext: [String: any Sendable]?) throws -> [Int] {
         do { return try upstream.applyChatTemplate(messages: messages, tools: tools, additionalContext: additionalContext) }
-        catch Tokenizers.TokenizerError.missingChatTemplate { throw MLXLMCommon.TokenizerError.missingChatTemplate }
+        catch Tokenizers.TokenizerError.missingChatTemplate {
+            // Gemma 4 fallback: build chat prompt manually
+            // Format: <bos><|turn>user\n{content}<turn|>\n<|turn>model\n
+            let isGemma4 = upstream.convertTokenToId("<|turn>") != nil
+            if isGemma4 {
+                var prompt = "<bos>"
+                for msg in messages {
+                    let role = msg["role"] as? String ?? "user"
+                    let content = msg["content"] as? String ?? ""
+                    prompt += "<|turn>\(role)\n\(content)<turn|>\n"
+                }
+                prompt += "<|turn>model\n"
+                print("[MLX] Applied Gemma 4 chat template fallback")
+                return upstream.encode(text: prompt, addSpecialTokens: false)
+            }
+            throw MLXLMCommon.TokenizerError.missingChatTemplate
+        }
     }
 }
 
